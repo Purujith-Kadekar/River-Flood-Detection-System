@@ -1,0 +1,12 @@
+# Raspberry Pi LoRa Gateway Dependencies
+# Install with: pip3 install -r requirements.txt
+
+# LoRaRF SX127x driver
+LoRaRF>=1.4.0
+
+# SPI support used by LoRaRF
+spidev>=3.5
+
+# Optional helpers for the dashboard app and SQLite inspection
+# flask>=2.0.0
+# sqlalchemy>=1.4.0

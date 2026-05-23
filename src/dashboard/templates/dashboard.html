@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>River Flood Monitoring Gateway</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <style>
+      :root {
+        --bg: oklch(96% 0.004 100);
+        --surface: oklch(100% 0 0);
+        --fg: oklch(15% 0.02 100);
+        --muted: oklch(40% 0.02 100);
+        --border: oklch(15% 0.02 100);
+        --accent: oklch(60% 0.22 25);
+        --font-display: "Times New Roman", "Iowan Old Style", Georgia, serif;
+        --font-body: ui-monospace, "IBM Plex Mono", "JetBrains Mono", Menlo, monospace;
+      }
+
+      body { background: var(--bg); color: var(--fg); font-family: var(--font-body); }
+      .navbar, .card, .table { background: var(--surface); }
+      .border-strong { border: 2px solid var(--border); }
+      .text-muted-strong { color: var(--muted) !important; }
+      .display-font { font-family: var(--font-display); }
+      .badge-accent { background: var(--accent); color: #fff; }
+
+      .status-dot {
+        inline-size: 10px; block-size: 10px; border-radius: 50%;
+        background: #16a34a; display: inline-block; margin-inline-end: 8px;
+      }
+      .status-dot-danger  { background: #dc2626; animation: pulse 1.5s infinite; }
+      .status-dot-warning { background: #f59e0b; animation: pulse 2s infinite; }
+
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+      .chart-wrap { min-block-size: 320px; }
+      .table > :not(caption) > * > * { border-color: var(--border); }
+
+      .btn-accent { background: var(--accent); color: #fff; border: 2px solid var(--border); }
+      .btn-accent:hover { background: color-mix(in oklch, var(--accent) 85%, black); color: #fff; }
+
+      .alert-danger-custom  { background: #fef2f2; border: 2px solid #dc2626; color: #991b1b; }
+      .alert-warning-custom { background: #fffbeb; border: 2px solid #f59e0b; color: #92400e; }
+
+      /* ── Live toast ── */
+      #floodToast { min-width: 300px; }
+      #liveIndicator {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        background: #16a34a;
+        margin-right: 5px;
+        animation: pulse 1.5s infinite;
+      }
+      #liveIndicator.stale { background: #9ca3af; animation: none; }
+
+      /* Blinking tab warning */
+      @keyframes blink-tab {} /* JS handles this */
+    </style>
+  </head>
+  <body>
+
+    <!-- ── Flood Toast (bottom-right, non-dismissable during FLOOD) ── -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index:9999">
+      <div id="floodToast" class="toast align-items-center text-bg-danger border-0" role="alert"
+           aria-live="assertive" aria-atomic="true" data-bs-autohide="false">
+        <div class="d-flex">
+          <div class="toast-body fw-bold" id="toastBody">⚠️ FLOOD ALERT</div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                  data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
+
+    <header>
+      <nav class="navbar border-bottom border-2 border-dark">
+        <div class="container">
+          <div class="d-flex flex-wrap align-items-center justify-content-between w-100 gap-2">
+            <span class="navbar-brand mb-0 h1 display-font">River Flood Monitoring Gateway</span>
+            <div class="d-flex gap-2">
+              <a href="/" class="btn btn-outline-dark rounded-0 border-2 btn-sm">Live Dashboard</a>
+              <a href="/flood-history" class="btn btn-accent rounded-0 btn-sm">Flood History</a>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container my-4">
+
+      <!-- ── Server-side alert banner (shown on page load only) ── -->
+      <div id="alertBanner">
+        {% if alert_message %}
+          <div id="pageAlert" class="alert {% if current_status == 'FLOOD' %}alert-danger-custom{% else %}alert-warning-custom{% endif %} alert-dismissible fade show mb-4" role="alert">
+            <strong>
+              {% if current_status == 'FLOOD' %}
+                <span class="status-dot status-dot-danger"></span> FLOOD ALERT!
+              {% else %}
+                <span class="status-dot status-dot-warning"></span> WARNING!
+              {% endif %}
+            </strong>
+            {{ alert_message }}
+            <small class="ms-2 text-muted-strong">(auto-closes in <span id="alertCountdown">8</span>s)</small>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+          <script>
+            (function() {
+              var secs = 8;
+              var el = document.getElementById('alertCountdown');
+              var timer = setInterval(function() {
+                secs--;
+                if (el) el.textContent = secs;
+                if (secs <= 0) {
+                  clearInterval(timer);
+                  var alertEl = document.getElementById('pageAlert');
+                  if (alertEl) {
+                    var bsAlert = bootstrap.Alert.getOrCreateInstance(alertEl);
+                    bsAlert.close();
+                  }
+                }
+              }, 1000);
+            })();
+          </script>
+        {% endif %}
+      </div>
+
+      <!-- ── Status cards ── -->
+      <section class="mb-4" aria-label="Status summary">
+        <div class="row g-3">
+          <div class="col-12 col-md-4">
+            <div class="card border-strong rounded-0 h-100">
+              <div class="card-body">
+                <p class="text-uppercase text-muted-strong small mb-1">Current Water Level</p>
+                <h2 class="display-font mb-0" id="currentLevel">{{ latest_level_cm }} cm</h2>
+                <p class="small text-muted-strong mb-0" id="trendText">
+                  {% if trend_text == 'RISING' or trend_text == 'RISING FAST' %}
+                    <span class="text-danger">▲ Rising ({{ trend_rate }} cm/h)</span>
+                  {% elif trend_text == 'FALLING' or trend_text == 'FALLING FAST' %}
+                    <span class="text-success">▼ Falling ({{ trend_rate }} cm/h)</span>
+                  {% else %}
+                    <span>─ Stable</span>
+                  {% endif %}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="card border-strong rounded-0 h-100">
+              <div class="card-body">
+                <p class="text-uppercase text-muted-strong small mb-1">Statistics (24h)</p>
+                <div class="d-flex justify-content-between">
+                  <div><span class="small text-muted-strong">Min</span><h5 class="mb-0" id="statMin">{{ stats.min }} cm</h5></div>
+                  <div><span class="small text-muted-strong">Avg</span><h5 class="mb-0" id="statAvg">{{ stats.avg }} cm</h5></div>
+                  <div><span class="small text-muted-strong">Max</span><h5 class="mb-0" id="statMax">{{ stats.max }} cm</h5></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="card border-strong rounded-0 h-100">
+              <div class="card-body">
+                <p class="text-uppercase text-muted-strong small mb-1">Alert Status</p>
+                <h2 class="display-font mb-0">
+                  <span class="status-dot" id="statusDot"
+                    aria-hidden="true"
+                    {% if current_status == 'FLOOD' %}style="background:#dc2626;animation:pulse 1.5s infinite"
+                    {% elif current_status == 'WARNING' %}style="background:#f59e0b;animation:pulse 2s infinite"
+                    {% endif %}
+                  ></span>
+                  <span id="statusText">{{ status_text }}</span>
+                </h2>
+                <p class="small text-muted-strong mb-0" id="statusDesc">{{ status_description }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="mb-3" aria-label="Thresholds">
+        <div class="d-flex gap-3 small align-items-center">
+          <span><span class="fw-bold">Warning:</span> {{ warning_cm }} cm</span>
+          <span><span class="fw-bold text-danger">Flood:</span> {{ threshold_cm }} cm</span>
+          <span class="text-muted-strong">Gauge: Riverside Station A</span>
+          <span class="ms-auto text-muted-strong small">
+            <span id="liveIndicator"></span>
+            <span id="syncStatus">Syncing…</span>
+          </span>
+        </div>
+      </section>
+
+      <section class="row g-4" aria-label="Live monitoring">
+        <div class="col-12 col-lg-8">
+          <article class="card border-strong rounded-0 h-100">
+            <div class="card-header border-bottom border-2 border-dark bg-white">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <div>
+                  <h3 class="display-font mb-0">Water Level Trends (Last 24 Hours)</h3>
+                  <p class="small text-muted-strong mb-0">
+                    Last updated <span id="lastUpdated">{{ last_updated }}</span>
+                  </p>
+                </div>
+                <span class="badge badge-accent rounded-0">Live</span>
+              </div>
+            </div>
+            <div class="card-body chart-wrap">
+              <canvas id="waterLevelChart" aria-label="Water level trend chart" role="img"></canvas>
+            </div>
+          </article>
+        </div>
+        <div class="col-12 col-lg-4">
+          <aside class="card border-strong rounded-0 h-100">
+            <div class="card-header border-bottom border-2 border-dark bg-white">
+              <h3 class="display-font mb-0">Recent Activity Log</h3>
+            </div>
+            <div class="card-body p-0">
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-0">
+                  <thead class="table-light">
+                    <tr><th scope="col">Timestamp</th><th scope="col">Level (cm)</th></tr>
+                  </thead>
+                  <tbody id="activityLogBody">
+                    {% for reading in recent_readings %}
+                    <tr>
+                      <td>{{ reading.timestamp.strftime('%H:%M') }}</td>
+                      <td>{{ reading.water_level | round(1) }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc4s9bIOgUxi8T/jzmFyxqeDDRWNP+VYkFOlTzJHY="
+            crossorigin="anonymous"></script>
+    <script>
+    (() => {
+      "use strict";
+
+      // ── Chart setup ──────────────────────────────────────────────────────
+      const chartCtx = document.getElementById("waterLevelChart").getContext("2d");
+      const THRESHOLD_CM = {{ threshold_cm }};
+      const WARNING_CM   = {{ warning_cm }};
+      const POLL_MS      = 5000;   // poll every 5 seconds
+      const MAX_POINTS   = 288;    // keep at most 288 points on chart (24h @ 5min)
+
+      Chart.defaults.font.family =
+        getComputedStyle(document.documentElement).getPropertyValue("--font-body");
+
+      const chart = new Chart(chartCtx, {
+        type: "line",
+        data: {
+          labels: {{ labels | tojson }},
+          datasets: [
+            {
+              label: "Water Level (cm)",
+              data: {{ data_cm | tojson }},
+              borderColor: getComputedStyle(document.documentElement).getPropertyValue("--accent"),
+              backgroundColor: "rgba(0,0,0,0.05)",
+              borderWidth: 2, pointRadius: 0, tension: 0.25, fill: true
+            },
+            {
+              label: "Warning",
+              data: Array({{ labels | length }}).fill(WARNING_CM),
+              borderColor: "#f59e0b", borderDash: [5,5],
+              borderWidth: 1, pointRadius: 0, fill: false
+            },
+            {
+              label: "Flood Threshold",
+              data: Array({{ labels | length }}).fill(THRESHOLD_CM),
+              borderColor: "#dc2626", borderDash: [5,5],
+              borderWidth: 2, pointRadius: 0, fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+          scales: {
+            y: { title: { display: true, text: "Centimeters" }, grid: { color: "rgba(0,0,0,0.1)" } },
+            x: { grid: { display: false } }
+          },
+          plugins: {
+            legend: { display: true, position: "top" },
+            tooltip: { mode: "index", intersect: false }
+          }
+        }
+      });
+
+      // ── State tracking ───────────────────────────────────────────────────
+      let lastTimestamp   = "";
+      let lastStatus      = "{{ current_status }}";
+      let toastInstance   = null;
+      let tabBlinkTimer   = null;
+      const origTitle     = document.title;
+
+      // ── Toast helper ─────────────────────────────────────────────────────
+      function showFloodToast(level, status) {
+        const toastEl = document.getElementById("floodToast");
+        const body    = document.getElementById("toastBody");
+
+        if (status === "FLOOD") {
+          toastEl.classList.remove("text-bg-warning");
+          toastEl.classList.add("text-bg-danger");
+          body.textContent = `⚠️ FLOOD ALERT — Water at ${level} cm!`;
+        } else {
+          toastEl.classList.remove("text-bg-danger");
+          toastEl.classList.add("text-bg-warning");
+          body.textContent = `⚠ WARNING — Water at ${level} cm`;
+        }
+
+        if (!toastInstance) {
+          toastInstance = new bootstrap.Toast(toastEl, { autohide: false });
+        }
+        toastInstance.show();
+      }
+
+      function hideFloodToast() {
+        if (toastInstance) toastInstance.hide();
+        toastInstance = null;
+      }
+
+      // ── Tab title blink ──────────────────────────────────────────────────
+      function startTabBlink(status) {
+        if (tabBlinkTimer) return;
+        let toggle = false;
+        tabBlinkTimer = setInterval(() => {
+          document.title = toggle
+            ? (status === "FLOOD" ? "🚨 FLOOD ALERT!" : "⚠ WARNING!")
+            : origTitle;
+          toggle = !toggle;
+        }, 900);
+      }
+
+      function stopTabBlink() {
+        clearInterval(tabBlinkTimer);
+        tabBlinkTimer = null;
+        document.title = origTitle;
+      }
+
+      // ── Status card updater ──────────────────────────────────────────────
+      function applyStatus(status, level) {
+        const dot  = document.getElementById("statusDot");
+        const text = document.getElementById("statusText");
+        const desc = document.getElementById("statusDesc");
+        const lvl  = document.getElementById("currentLevel");
+        const ind  = document.getElementById("liveIndicator");
+        const sync = document.getElementById("syncStatus");
+
+        lvl.textContent  = `${level} cm`;
+        ind.classList.remove("stale");
+        sync.textContent = "Live — updated just now";
+
+        if (status === "FLOOD") {
+          dot.style.background  = "#dc2626";
+          dot.style.animation   = "pulse 1.5s infinite";
+          text.textContent      = "FLOOD";
+          desc.textContent      = `Water at ${level} cm — exceeds ${THRESHOLD_CM} cm threshold!`;
+          if (lastStatus !== "FLOOD") showFloodToast(level, "FLOOD");
+          startTabBlink("FLOOD");
+        } else if (status === "WARNING") {
+          dot.style.background  = "#f59e0b";
+          dot.style.animation   = "pulse 2s infinite";
+          text.textContent      = "Warning";
+          desc.textContent      = `Water at ${level} cm — approaching flood threshold.`;
+          if (lastStatus !== "WARNING") showFloodToast(level, "WARNING");
+          startTabBlink("WARNING");
+        } else {
+          dot.style.background  = "#16a34a";
+          dot.style.animation   = "none";
+          text.textContent      = "Safe";
+          desc.textContent      = "No active flood warnings";
+          hideFloodToast();
+          stopTabBlink();
+        }
+        lastStatus = status;
+      }
+
+      // ── Chart appender ───────────────────────────────────────────────────
+      function appendChartPoint(label, value) {
+        chart.data.labels.push(label);
+        chart.data.datasets[0].data.push(value);
+        // keep threshold datasets in sync (same length)
+        chart.data.datasets[1].data.push(WARNING_CM);
+        chart.data.datasets[2].data.push(THRESHOLD_CM);
+
+        // trim to MAX_POINTS
+        if (chart.data.labels.length > MAX_POINTS) {
+          chart.data.labels.shift();
+          chart.data.datasets.forEach(ds => ds.data.shift());
+        }
+        chart.update("none");
+      }
+
+      // ── Activity log updater ─────────────────────────────────────────────
+      function prependActivityRow(time, level) {
+        const tbody = document.getElementById("activityLogBody");
+        const tr    = document.createElement("tr");
+        tr.innerHTML = `<td>${time}</td><td>${level}</td>`;
+        tbody.insertBefore(tr, tbody.firstChild);
+        // keep max 8 rows
+        while (tbody.rows.length > 8) tbody.deleteRow(tbody.rows.length - 1);
+      }
+
+      // ── Poll /api/live-data every 5 seconds ──────────────────────────────
+      async function poll() {
+        try {
+          const resp = await fetch("/api/live-data", { cache: "no-store" });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+          const d = await resp.json();
+          if (d.error) return;
+
+          const ts    = d.timestamp;            // ISO string
+          const level = parseFloat(d.water_level).toFixed(1);
+          const time  = ts.substring(11, 16);  // "HH:MM"
+
+          // Only update UI if there's actually new data
+          if (ts !== lastTimestamp) {
+            lastTimestamp = ts;
+            document.getElementById("lastUpdated").textContent = time;
+            appendChartPoint(time, parseFloat(level));
+            prependActivityRow(time, level);
+            applyStatus(d.status, level);
+          } else {
+            // No new data yet — mark indicator as slightly stale but don't alarm
+            document.getElementById("syncStatus").textContent = "Waiting for sensor…";
+          }
+        } catch (err) {
+          console.warn("[poll] Error:", err);
+          document.getElementById("liveIndicator").classList.add("stale");
+          document.getElementById("syncStatus").textContent = "Connection lost — retrying…";
+        }
+      }
+
+      // ── Bootstrap: first poll immediately, then every 5 s ────────────────
+      poll();
+      setInterval(poll, POLL_MS);
+
+    })();
+    </script>
+  </body>
+</html>
