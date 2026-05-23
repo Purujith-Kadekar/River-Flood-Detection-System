@@ -7,6 +7,9 @@ env/
 instance/
 *.db
 
+docs/Important Details.txt
+docs/Pinouts.txt
+
 # Hardware
 .pio/
 .vscode/
