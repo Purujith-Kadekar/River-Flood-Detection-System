@@ -8,6 +8,7 @@ instance/
 *.db
 private
 
+docs/PPTs/
 docs/Important Details.txt
 docs/Pinouts.txt
 
