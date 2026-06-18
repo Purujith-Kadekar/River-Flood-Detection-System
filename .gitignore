@@ -6,6 +6,7 @@ venv/
 env/
 instance/
 *.db
+private
 
 docs/Important Details.txt
 docs/Pinouts.txt
