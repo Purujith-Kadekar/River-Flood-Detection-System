@@ -2,9 +2,8 @@
 
 A real-time flood monitoring and alerting system using LoRa technology.
 
-![Alt Text](img/Best1.jpg)
-![Alt Text](img/Best4.jpg)
-![Alt Text](img/Best6.jpg)
+![River Node](img/Best3.png)
+![Dashboard](img/Best6.jpg)
 
 
 ## Project Structure
