@@ -58,6 +58,7 @@
         animation: pulse 1.5s infinite;
       }
       #liveIndicator.stale { background: #9ca3af; animation: none; }
+      #liveIndicator.nodata { background: #dc2626; animation: pulse 1.5s infinite; }
 
       /* Blinking tab warning */
       @keyframes blink-tab {} /* JS handles this */
@@ -353,12 +354,8 @@
         const text = document.getElementById("statusText");
         const desc = document.getElementById("statusDesc");
         const lvl  = document.getElementById("currentLevel");
-        const ind  = document.getElementById("liveIndicator");
-        const sync = document.getElementById("syncStatus");
 
         lvl.textContent  = `${level} cm`;
-        ind.classList.remove("stale");
-        sync.textContent = "Live — updated just now";
 
         if (status === "FLOOD") {
           dot.style.background  = "#dc2626";
@@ -412,33 +409,61 @@
       }
 
       // ── Poll /api/live-data every 5 seconds ──────────────────────────────
+      // Freshness is judged by how OLD the latest DB row is (age_seconds),
+      // not by whether this fetch() call succeeded. A successful fetch just
+      // means the dashboard server is up — it says nothing about whether the
+      // sensor/gateway pipeline is actually delivering data.
+      const STALE_AFTER_SECONDS    = 15;   // > 1 sensor batch interval (5s)
+      const NO_DATA_AFTER_SECONDS  = 60;   // sustained silence from the gateway
+
+      function setSyncIndicator(level, text) {
+        const ind  = document.getElementById("liveIndicator");
+        const sync = document.getElementById("syncStatus");
+        ind.classList.remove("stale", "nodata");
+        if (level === "stale") ind.classList.add("stale");
+        if (level === "nodata") ind.classList.add("nodata");
+        sync.textContent = text;
+      }
+
       async function poll() {
         try {
           const resp = await fetch("/api/live-data", { cache: "no-store" });
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
           const d = await resp.json();
-          if (d.error) return;
+          if (d.error) {
+            setSyncIndicator("nodata", "No readings yet — waiting for first sensor packet");
+            return;
+          }
 
           const ts    = d.timestamp;            // ISO string
           const level = parseFloat(d.water_level).toFixed(1);
           const time  = ts.substring(11, 16);  // "HH:MM"
+          const age   = d.age_seconds;
 
-          // Only update UI if there's actually new data
+          // Only push a new chart point / activity row when there's an
+          // actual new reading — but ALWAYS re-evaluate freshness below,
+          // since age keeps growing even between new readings.
           if (ts !== lastTimestamp) {
             lastTimestamp = ts;
             document.getElementById("lastUpdated").textContent = time;
             appendChartPoint(time, parseFloat(level));
             prependActivityRow(time, level);
             applyStatus(d.status, level);
+          }
+
+          if (age <= STALE_AFTER_SECONDS) {
+            setSyncIndicator("live", "Live — updated " + Math.round(age) + "s ago");
+          } else if (age <= NO_DATA_AFTER_SECONDS) {
+            setSyncIndicator("stale", "Stale data — last reading " + Math.round(age) + "s ago");
           } else {
-            // No new data yet — mark indicator as slightly stale but don't alarm
-            document.getElementById("syncStatus").textContent = "Waiting for sensor…";
+            setSyncIndicator("nodata", "No new data for " + Math.round(age) + "s — check sensor/gateway");
           }
         } catch (err) {
+          // This branch means the Flask app itself is unreachable —
+          // it has nothing to do with the sensor or the LoRa link.
           console.warn("[poll] Error:", err);
-          document.getElementById("liveIndicator").classList.add("stale");
-          document.getElementById("syncStatus").textContent = "Connection lost — retrying…";
+          setSyncIndicator("nodata", "Dashboard server unreachable — retrying…");
         }
       }
 

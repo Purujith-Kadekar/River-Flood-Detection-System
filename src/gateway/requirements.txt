@@ -7,6 +7,10 @@ LoRaRF>=1.4.0
 # SPI support used by LoRaRF
 spidev>=3.5
 
-# Optional helpers for the dashboard app and SQLite inspection
-# flask>=2.0.0
-# sqlalchemy>=1.4.0
+# Required for the Flask dashboard (app.py)
+flask>=2.0.0
+flask-sqlalchemy>=3.0.0
+
+# Optional: SMS alerts (.env) and reading .env files
+requests>=2.28.0
+python-dotenv>=1.0.0

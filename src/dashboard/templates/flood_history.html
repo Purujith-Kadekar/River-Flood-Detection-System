@@ -94,7 +94,7 @@
                   aria-controls="year{{ year }}"
                 >
                   <span class="display-font">{{ year }}</span>
-                  <span class="badge bg-secondary ms-2">{{ months.values() | sum(attribute='__len__') }} event(s)</span>
+                  <span class="badge bg-secondary ms-2">{{ months.values() | map('length') | sum }} event(s)</span>
                 </button>
               </h2>
               <div id="year{{ year }}"

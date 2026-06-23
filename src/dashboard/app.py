@@ -14,6 +14,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 from pathlib import Path
+import os
 import random
 
 app = Flask(__name__)
@@ -214,15 +215,22 @@ def dashboard():
 
 @app.route("/api/live-data")
 def api_live_data():
-    """JSON endpoint — polled by the dashboard chart every few seconds."""
+    """JSON endpoint — polled by the dashboard chart every few seconds.
+
+    Returns age_seconds so the frontend can tell the difference between
+    "no new sensor reading yet" and "the sensor/gateway pipeline is dead" —
+    instead of just reporting whether the fetch() itself succeeded.
+    """
     latest = WaterLevel.query.order_by(WaterLevel.timestamp.desc()).first()
     if not latest:
         return jsonify({"error": "no data yet"}), 404
+    age_seconds = (datetime.now() - latest.timestamp).total_seconds()
     return jsonify({
         "timestamp":   latest.timestamp.isoformat(),
         "water_level": latest.water_level,
         "river_name":  latest.river_name,
         "status":      check_flood_status(latest.water_level),
+        "age_seconds": round(age_seconds, 1),
     })
 
 
@@ -234,16 +242,42 @@ def flood_history():
         year  = flood.start_time.year
         month = flood.start_time.strftime("%B")
         flood_by_year_month.setdefault(year, {}).setdefault(month, []).append(flood)
-    return render_template("flood_history.html",
-                           flood_by_year_month=flood_by_year_month)
+
+    total_events  = len(floods)
+    active_events = sum(1 for f in floods if f.end_time is None)
+    peak_level    = round(max((f.max_water_level for f in floods), default=0), 1)
+
+    return render_template(
+        "flood_history.html",
+        flood_by_year_month = flood_by_year_month,
+        total_events        = total_events,
+        active_events       = active_events,
+        peak_level          = peak_level,
+        flood_threshold     = int(FLOOD_THRESHOLD),
+    )
+
+
+DEMO_MODE = os.getenv("DEMO_MODE", "0").lower() in {"1", "true", "yes", "on"}
 
 
 @app.route("/simulate-sensor")
 def simulate_sensor():
     """
-    Demo route: inject a synthetic reading into the DB so you can
+    Demo/dev-only route: inject a synthetic reading into the DB so you can
     test the dashboard without real hardware running.
+
+    Disabled by default. To use it while testing without hardware, start
+    the app with:  DEMO_MODE=1 python3 app.py
+    It is intentionally OFF for normal/demo-day runs so nobody can trigger
+    a fake flood by accident (e.g. clicking the wrong link, or a stray
+    request) while presenting.
     """
+    if not DEMO_MODE:
+        return jsonify({
+            "error": "Simulation is disabled. This route only works when "
+                     "the server is started with DEMO_MODE=1."
+        }), 403
+
     base  = 8.0
     level = round(base + random.uniform(-3, 6), 1)
     if random.random() < 0.15:
